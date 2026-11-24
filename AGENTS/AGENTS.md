@@ -19,13 +19,19 @@
 
 ### Pianificazione incrementale (per modulo)
 
-- Prima di iniziare un modulo (o un task multi-step), proponi un piano suddiviso in task atomici, sequenziali e verificabili.
-- Dopo l'approvazione, salva il piano in `PLAN.md` (in italiano, tracciato in Git e non escluso da `.gitignore`).
-- Implementa un task alla volta e aggiorna `PLAN.md` solo dopo averne verificato realmente il completamento.
-- Al termine di ogni task, aggiorna `DEVELOPMENT_LOG.md` e proponi un messaggio di commit (che includa le modifiche e `PLAN.md`).
-- Non procedere al task successivo senza autorizzazione, salvo diversa indicazione esplicita dell'utente.
-- A modulo completato e Definition of Done verificata, aggiorna i checkbox in `PROJECT_SPEC.md`, registra il riepilogo finale in `DEVELOPMENT_LOG.md` e rimuovi `PLAN.md`.
-- Per bugfix isolati o micro-modifiche locali non è richiesto `PLAN.md`.
+## Pianificazione incrementale
+
+- Prima di iniziare un modulo, se solo se richiesto proponi un piano suddiviso in task atomici, sequenziali e verificabili.
+- Dopo l'approvazione, salva il piano in `PLAN.md`.
+- Implementa un task alla volta e aggiorna il piano
+  solo dopo aver verificato il completamento del task.
+- Aggiorna `DEVELOPMENT_LOG.md` al termine di ogni task
+  e proponi un messaggio di commit.
+- Non procedere al task successivo senza autorizzazione.
+- A modulo completato e Definition of Done verificata,
+  registra il riepilogo finale in `DEVELOPMENT_LOG.md`
+  e rimuovi `PLAN.md`.
+- Versiona il piano in Git insieme alle modifiche.
 
 ### Durante il lavoro
 

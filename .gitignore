@@ -5,9 +5,19 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.ruff_cache/
 
 # Virtual environments
 .venv
 
-# Sample stream dumps
+# Local environment secrets
+.env
+
+# Runtime data, snapshots, and Spark checkpoints
+data/
+checkpoints/
+
+# Sample stream dumps (keep test fixtures tracked)
 *.jsonl
+!services/replay/fixtures/*.jsonl

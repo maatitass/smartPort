@@ -1,7 +1,24 @@
 [project]
 name = "smartport"
 version = "0.1.0"
-description = "Add your description here"
+description = "Smart Port — Big Data AIS maritime traffic monitoring and integration pipeline"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

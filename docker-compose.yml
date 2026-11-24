@@ -1,0 +1,9 @@
+# Smart Port — Docker Compose Stack (Boilerplate — Module 1)
+# Reference: PROJECT_SPEC.md (Section 2 & Module 1)
+# Rules:
+# - Multi-arch images (linux/arm64 + linux/amd64)
+# - All host-published ports bound strictly to 127.0.0.1
+# - Credentials sourced from .env (never hardcoded)
+# - Total local RSS target <= 6.5-7.0 GB
+
+services: {}
