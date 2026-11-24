@@ -49,3 +49,21 @@ Registro cronologico operativo del progetto (riferimento architetturale: `PROJEC
   - `uv run pytest` / `uv run ruff check` → **NOT RUN** (solo scheletro senza test né pacchetti dev sincronizzati offline)
 - **Definition of Done:** Modulo 0 non ancora iniziato; struttura pronta per avviare la pianificazione del Modulo 0.
 - **Blocker e prossimo passo:** proporre `PLAN.md` per il **Modulo 0** (`scripts/probe_sources.py`) e attendere approvazione prima di implementare.
+
+---
+
+## 2026-11-24 — Aggiornamento strategia UN/LOCODE (codici globali + nomi regionali)
+
+- **Modulo:** Pre-Modulo 0 (Specifica)
+- **Task:** Aggiornamento della strategia di Entity Resolution UN/LOCODE in `AGENTS/PROJECT_SPEC.md` (approccio ibrido: porti marittimi globali per codici a 5 caratteri, perimetro Baltico/Nord Europa per nomi testuali liberi).
+- **Stato:** completato
+- **Attività svolte:**
+  - Aggiornato `AGENTS/PROJECT_SPEC.md` sostituendo `data_static/unlocode_ports_baltic_eu.csv` con `data_static/unlocode_ports.csv` (tutti i porti marittimi globali con coordinate valide).
+  - Definiti i campi `is_nordic_baltic_scope` (`FI, SE, EE, LV, LT, PL, DE, DK, NO, RU, NL, BE, GB`) e `is_ambiguous_name` in `ports_builder.py` e le regole distinte in `entity_resolution.py` (lookup globale per `RESOLVED_EXACT_LOCODE`/`RESOLVED_SPACED_LOCODE`, lookup circoscritto per `RESOLVED_UNAMBIGUOUS_NAME`).
+- **Decisioni tecniche:**
+  - Mantenuto Digitraffic Marine come sorgente AIS (scartato AISStream.io globale per rischi di affidabilità/outage, assenza di API REST per anagrafica, incompatibilità con integrazione meteo mirata e rischio saturazione risorse locali).
+  - Adottato CSV UN/LOCODE globale sui soli porti marittimi (~1 MB) per non perdere rotte certe verso porti europei/extra-UE (`NLRTM`, `BEANR`, `DEHAM`, ecc.), limitando il matching per nome testuale al bacino Baltico/Nord Europa per evitare falsi positivi da omonimie globali.
+- **Verifiche:**
+  - `grep` e `git diff AGENTS/PROJECT_SPEC.md` → **PASS** (zero riferimenti residui a `unlocode_ports_baltic_eu.csv`)
+- **Definition of Done:** Modulo 0 pronto per iniziare.
+- **Blocker e prossimo passo:** avviare la pianificazione (`PLAN.md`) o l'implementazione del **Modulo 0** su richiesta dell'utente.

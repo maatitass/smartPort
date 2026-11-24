@@ -128,13 +128,13 @@ flowchart LR
 |---|---|---|---|---|---|
 | 1 | **Digitraffic AIS Locations** (`wss://meri.digitraffic.fi:443/mqtt`, `vessels-v2/+/location`) | Fintraffic (FI) | MQTT over WSS / JSON | CC BY 4.0, no API key, client ID descrittivo | Continuo (~35 msg/s) |
 | 2 | **Digitraffic AIS Vessels** (`https://meri.digitraffic.fi/api/ais/v1/vessels`) | Fintraffic (FI) | REST / JSON (`Accept-Encoding: gzip`, `Digitraffic-User` obbligatori) | CC BY 4.0, cache 1m, max 60 req/min | Sync ogni 60 min |
-| 3 | **UNECE UN/LOCODE** (`data_static/unlocode_ports_baltic_eu.csv`) | UNECE (ONU) | File CSV tabellare | CC BY 4.0 | Statico all'avvio |
+| 3 | **UNECE UN/LOCODE** (`data_static/unlocode_ports.csv`) | UNECE (ONU) | File CSV tabellare (porti marittimi globali, ~1 MB) | CC BY 4.0 | Statico all'avvio |
 | 4 | **Open-Meteo Weather & Marine** (`api.open-meteo.com/v1/forecast` + `marine-api.open-meteo.com/v1/marine`) | Open-Meteo | REST / JSON (multi-punto) | CC BY 4.0 uso non commerciale, no API key, 10k req/giorno | Sync ogni 60 min (2 chiamate HTTP/ora) |
 
 ### 3.2 I 3 Pattern di Data Integration nel Nucleo
 
 1. **Stream-Static Entity Join (`MMSI`):** riconciliazione posizioni live MQTT ⋈ snapshot anagrafica `vessels` (garantita univoca 1:1 per `mmsi`). Gli eventi privi di corrispondenza sono preservati con `metadata_matched = false`.
-2. **Entity Resolution & Schema Mediation (`voyage_destination` ⋈ UNECE UN/LOCODE):** normalizzazione conservativa (*Precision > Recall*) del campo testuale sporco `destination` contro il dizionario ONU dei porti marittimi. Nessuna associazione arbitraria per destinazioni ambigue o multi-scalo.
+2. **Entity Resolution & Schema Mediation (`voyage_destination` ⋈ UNECE UN/LOCODE):** normalizzazione conservativa (*Precision > Recall*) del campo testuale sporco `destination` contro il dizionario ONU dei porti marittimi: **match globale sui codici UN/LOCODE a 5 caratteri** (univoci a livello mondiale) e **match sui nomi testuali liberi circoscritto al bacino Baltico / Nord Europa** (`FI, SE, EE, LV, LT, PL, DE, DK, NO, RU, NL, BE, GB`) solo se univoco. Nessuna associazione arbitraria per destinazioni ambigue o multi-scalo.
 3. **Spatial-Temporal Join Multi-Provider (`(sea_area, weather_hour_utc)`):** associazione del contesto meteo-marino modellistico orario di Open-Meteo (su 8–10 zone costiere/marittime baltiche) agli eventi e alle finestre AIS.
 
 ---
@@ -195,7 +195,7 @@ smartPort/
 │   └── probe_sources.py              # MODULO 0 — Verifica sperimentale delle 4 sorgenti
 │
 ├── data_static/
-│   └── unlocode_ports_baltic_eu.csv  # Estratto filtrato UNECE UN/LOCODE (CC BY 4.0)
+│   └── unlocode_ports.csv            # Porti marittimi UNECE UN/LOCODE con coordinate (CC BY 4.0)
 │
 ├── infra/                            # MODULO 1 — Bootstrap Kafka & Elasticsearch
 │   ├── kafka/init-topics.sh
@@ -229,18 +229,18 @@ I moduli sono ordinati per dipendenza. Ogni modulo va implementato e verificato 
 
 ### Modulo 0 — Verifica Sperimentale delle Sorgenti *(Gate Pre-Implementazione)*
 
-- **Percorso:** `scripts/probe_sources.py`, `data_static/unlocode_ports_baltic_eu.csv`, `docs/source_validation_report.md`
+- **Percorso:** `scripts/probe_sources.py`, `data_static/unlocode_ports.csv`, `docs/source_validation_report.md`
 - **Dipendenze:** nessuna (eseguibile con `uv`, senza Docker).
 - **Scopo:** misurare sperimentalmente schemi reali, disponibilità, volumi, limiti e tassi di riconciliazione di tutte e 4 le sorgenti prima di congelare `schemas.py` e i servizi.
 - **Attività richieste:**
   1. Cattura MQTT Digitraffic di **15 minuti** (`vessels-v2/+/location` e `status`): misurare msg/s, navi distinte, presenza di `msg.retain == True`, latenza p50/p95/p99/max, eventi out-of-order, collisioni sub-secondo e duplicati esatti.
   2. Chiamata live a `GET https://meri.digitraffic.fi/api/ais/v1/vessels` (`Accept-Encoding: gzip`, `Digitraffic-User`): registrare nomi esatti dei campi JSON, dimensione payload, numero di MMSI, eventuali duplicati e **% reale di match MMSI** rispetto al campione MQTT da 15 min.
-  3. Acquisizione/estrazione di `data_static/unlocode_ports_baltic_eu.csv` da UNECE UN/LOCODE (porti marittimi con coordinate valide) e test empirico delle regole conservative di Entity Resolution sulle destinazioni reali di `/api/ais/v1/vessels`.
+  3. Acquisizione/estrazione di `data_static/unlocode_ports.csv` da UNECE UN/LOCODE (tutti i porti marittimi con `Function` contenente `1` e coordinate valide) e test empirico delle regole conservative di Entity Resolution (codici globali + nomi circoscritti a Baltico/Nord Europa) sulle destinazioni reali di `/api/ais/v1/vessels`, misurando anche la quota di destinazioni baltiche vs europee vs extra-europee.
   4. Chiamata batch multi-punto a **Open-Meteo Weather + Marine** sugli 8–10 punti marittimi baltici (`cell_selection=sea`): verificare che vento e `wave_height` siano valorizzati (non `null`) e registrare schema e latenza.
 - **Definition of Done:**
   - [ ] `docs/source_validation_report.md` popolato con numeri reali misurati per tutte e 4 le sorgenti.
   - [ ] Conferma empirica della soglia di watermark (default `2 minutes`, aggiornabile in base al p99 reale).
-  - [ ] `data_static/unlocode_ports_baltic_eu.csv` validato e salvato nel repository.
+  - [ ] `data_static/unlocode_ports.csv` validato e salvato nel repository.
 
 ---
 
@@ -288,7 +288,7 @@ I moduli sono ordinati per dipendenza. Ogni modulo va implementato e verificato 
   - **Zero dipendenze native C/C++** (niente `pyarrow`/`pandas`; solo `requests` + stdlib `csv`/`json`).
   - **`atomic_io.py`:** scrive in `<dir>/.tmp_<ts>.jsonl`, esegue `os.replace` verso `<dir>/<dataset>_v<ts>.jsonl`, aggiorna atomicamente `<dir>/CURRENT` e conserva gli **ultimi 10 snapshot** (evitando `FileNotFoundException` in Spark). Se un fetch fallisce o produce `< soglia` righe valide, **non aggiorna `CURRENT`**.
   - **`vessels_sync.py` (ogni 60 min):** scarica `/api/ais/v1/vessels` (`Accept-Encoding: gzip`, `Digitraffic-User`), deduplica rigorosamente 1 riga per `mmsi` (per `timestamp` max), trimma stringhe, converte `0` in `null` per `imo`/`draught`/dimensioni, applica lookup `ship_category` (AIS type) e `flag_country` (MID MMSI), separa campi stabili da `voyage_*`.
-  - **`ports_builder.py` (all'avvio):** legge `data_static/unlocode_ports_baltic_eu.csv`, converte coordinate DMS→decimali, marca eventuali nomi omonimi (`is_ambiguous_name = true/false`) così Spark non effettua mai associazioni arbitrarie.
+  - **`ports_builder.py` (all'avvio):** legge `data_static/unlocode_ports.csv` (porti marittimi globali UN/LOCODE con coordinate), converte coordinate DMS→decimali, imposta `is_nordic_baltic_scope = (country in {FI, SE, EE, LV, LT, PL, DE, DK, NO, RU, NL, BE, GB})` e marca eventuali nomi omonimi dentro lo scope regionale (`is_ambiguous_name = true/false`) così Spark non effettua mai associazioni arbitrarie.
   - **`weather_sync.py` (ogni 60 min):** interroga Open-Meteo Weather + Marine in **2 sole chiamate HTTP multi-punto** sulle 8–10 zone marittime baltiche definite in `lookups.py` (finestra 24h passate + 6h future), producendo 1 riga per `(sea_area, weather_hour_utc)` con vento in nodi, onde in metri, `sea_state_class` e `weather_is_model = true`.
 - **Definition of Done:**
   - [ ] All'avvio produce i 3 file `CURRENT` validi (`vessels`, `ports`, `weather`) in `/data/reference/`.
@@ -310,10 +310,10 @@ Diviso internamente in **due sotto-moduli** per testabilità rapida: prima tutta
     - `EMPTY` → stringa nulla/vuota
     - `MULTI_LEG_ROUTE` → presenza separatori multi-scalo (`<>`, `<->`, `/`, `->`, o 2+ LOCODE); popola `dest_route_locodes` ma lascia `dest_locode = null` e `geodesic_dist_to_dest_km = null`
     - `OPERATIONAL_OR_AREA` → pattern operativi (`PILOT`, `AREA`, `WORKS`, `GULF`, `SEA`, `SAR`, `PATROL`, `ORDERS`)
-    - `RESOLVED_EXACT_LOCODE` → match esatto 5 char su `ports`
-    - `RESOLVED_SPACED_LOCODE` → formato `XX YYY` o `LOCODE + suffisso` (`RDS`, `ANCH`, `PORT`)
-    - `RESOLVED_UNAMBIGUOUS_NAME` → match esatto su nome porto con `is_ambiguous_name == false`
-    - `AMBIGUOUS` → match su nome omonimo (`is_ambiguous_name == true`); `dest_locode = null`
+    - `RESOLVED_EXACT_LOCODE` → match esatto 5 char su `ports` (lookup **globale**, codici univoci al mondo)
+    - `RESOLVED_SPACED_LOCODE` → formato `XX YYY` o `LOCODE + suffisso` (`RDS`, `ANCH`, `PORT`) su `ports` (lookup **globale**)
+    - `RESOLVED_UNAMBIGUOUS_NAME` → match esatto su nome porto **solo con `is_nordic_baltic_scope == true`** e `is_ambiguous_name == false`
+    - `AMBIGUOUS` → match su nome omonimo in `is_nordic_baltic_scope == true` (`is_ambiguous_name == true`); `dest_locode = null`
     - `UNRESOLVED` → nessun match; `dest_locode = null`
   - **`enrichment.py`:** `SnapshotLoader` legge `CURRENT` (o `PINNED_*_SNAPSHOT` se impostato per replay), ricarica il JSONL solo al cambio versione, esegue i **3 Broadcast Left Join** garantendo che il conteggio righe in uscita sia sempre identico a quello in ingresso (`count_out == count_in`), e propaga `metadata_snapshot_id` e `weather_snapshot_id`.
   - **`aggregations.py`:** definisce le trasformazioni per `ais-traffic-agg` (finestra `5 min`, `groupingSets` su `agg_level`: `global`, `by_area`, `by_category`, `by_area_category`) e `ais-geo-agg` (finestra `5 min`, `geohash_5`, `sea_area`).

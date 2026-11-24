@@ -19,32 +19,54 @@
 
 ### Pianificazione incrementale (per modulo)
 
-## Pianificazione incrementale
+## Pianificazione
 
-- Prima di iniziare un modulo, se solo se richiesto proponi un piano suddiviso in task atomici, sequenziali e verificabili.
-- Dopo l'approvazione, salva il piano in `PLAN.md`.
-- Implementa un task alla volta e aggiorna il piano
-  solo dopo aver verificato il completamento del task.
-- Aggiorna `DEVELOPMENT_LOG.md` al termine di ogni task
-  e proponi un messaggio di commit.
-- Non procedere al task successivo senza autorizzazione.
-- A modulo completato e Definition of Done verificata,
-  registra il riepilogo finale in `DEVELOPMENT_LOG.md`
-  e rimuovi `PLAN.md`.
-- Versiona il piano in Git insieme alle modifiche.
+- Prima di iniziare un modulo, se e solo se richiesto, elabora un piano suddiviso in task atomici, sequenziali e verificabili.
+- Analizza preventivamente `PROJECT_SPEC.md`, il repository, le dipendenze, i contratti tecnici e la Definition of Done.
+- Il piano deve essere **completo, dettagliato, autosufficiente e direttamente eseguibile**, non un semplice elenco di attività. Deve consentire l'implementazione in una nuova sessione senza dipendere dal contesto della conversazione precedente.
+- Per ogni task definisci:
+  - Obiettivo e dipendenze.
+  - File da creare o modificare e relative responsabilità.
+  - Logica implementativa e sequenza delle operazioni.
+  - Interfacce, schemi, configurazioni e contratti da rispettare.
+  - Decisioni tecniche e relative motivazioni.
+  - Edge case, gestione degli errori e rischi prevedibili.
+  - Test, comandi di verifica e risultati attesi.
+  - Criteri di accettazione oggettivi e collegamento alla Definition of Done.
+- Risolvi durante la pianificazione le ambiguità e le decisioni tecniche significative. Non rimandare all'implementazione scelte progettuali essenziali.
+- Mantieni il dettaglio proporzionato alla complessità del task, evitando duplicazioni della specifica e overengineering.
+- Durante la pianificazione non modificare il codice.
+- Dopo l'approvazione, salva il piano integrale in `PLAN.md`, senza riassumerlo, omettere dettagli o alterare le decisioni approvate.
+- Versiona `PLAN.md` in Git insieme alle modifiche.
+
+## Implementazione
 
 ### Durante il lavoro
 
+- Consulta `PROJECT_SPEC.md`, `PLAN.md` (se presente) e le ultime voci pertinenti di `DEVELOPMENT_LOG.md`.
+- Implementa esclusivamente il task autorizzato, rispettando il piano approvato.
+- Non ripianificare task già definiti. Gestisci autonomamente le decisioni implementative locali.
+- Se emergono conflitti, blocker o necessità di variazioni sostanziali al piano o alla specifica, fermati sulle attività interessate e chiedi approvazione.
 - Preferisci modifiche minime, mirate, leggibili e verificabili.
 - Riutilizza il codice esistente e preserva le modifiche dell'utente.
 - Aggiungi o aggiorna i test pertinenti.
 - Non lasciare implementazioni fittizie o TODO necessari al completamento del task.
 
-### Prima di concludere
+### Al termine di ogni task
 
 - Esegui le verifiche pertinenti e ispeziona il diff finale.
-- Aggiorna i checkbox della Definition of Done solo dopo aver verificato realmente i criteri.
-- Aggiorna la documentazione interessata e `DEVELOPMENT_LOG.md`.
+- Aggiorna i checkbox di `PLAN.md` (se presente) e della Definition of Done in `PROJECT_SPEC.md` solo dopo aver verificato realmente i relativi criteri.
+- Aggiorna la documentazione interessata.
+- Registra in `DEVELOPMENT_LOG.md` le attività svolte, le verifiche, le decisioni rilevanti, i problemi aperti e il prossimo passo, anche se il task è parziale o bloccato.
+- Proponi un messaggio di commit in inglese secondo Conventional Commits.
+- Non eseguire commit né procedere al task successivo senza autorizzazione.
+
+### Al completamento del modulo
+
+- Verifica integralmente la Definition of Done.
+- Registra il riepilogo finale in `DEVELOPMENT_LOG.md`.
+- Rimuovi `PLAN.md` (se presente), assicurandoti che il piano sia recuperabile dalla cronologia Git.
+- Proponi il commit finale e il merge su `main`, senza eseguirli autonomamente.
 
 ## 3. Convenzioni e tooling
 
