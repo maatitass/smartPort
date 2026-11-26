@@ -239,7 +239,7 @@ Essere consapevoli di ciò che il sistema garantisce — e di ciò che **non** g
 ## 6. Roadmap, Testing, Benchmark e Copertura dei Requisiti
 
 ### 6.1 Le 6 Fasi Incrementali (Fasi 0 → 5)
-1. **Fase 0 — Validazione delle 3 sorgenti reali:** script `scripts/probe_sources.py` per misurare sul campo volumi, latenza, sentinelle, match MMSI e destinazioni reali; genera `data_static/unlocode_ports.csv` e `docs/source_validation_report.md` per calibrare watermark e confini geografici.
+1. **Fase 0 — Validazione delle 3 sorgenti reali *(completata — vedi Sez. 9)*:** script `scripts/probe_sources.py` per misurare sul campo volumi, latenza, sentinelle, match MMSI e destinazioni reali; genera `data_static/unlocode_ports.csv` e `docs/source_validation_report.md` per calibrare watermark e confini geografici.
 2. **Fase 1 — Infrastruttura Docker Compose & Ingestion:** `docker-compose.yml`, `init-kafka.sh` (1 topic), `init-es.sh` (5 indici fissi + `--reset`) e `ingestor.py` live verso Kafka.
 3. **Fase 2 — Spark Streaming: Pulizia, Dedup, Integrazione & DQ (*Vertical Slice*):** prima pipeline end-to-end funzionante sui 2 Worker fino a `ais-events`, `ais-quarantine` e `ais-dq-metrics`, con unit test `pytest` e **verifica sperimentale immediata su Spark 3.5.5** della concatenazione deduplicazione + finestra in `append` mode.
 4. **Fase 3 — Spark Streaming: Aggregazioni Temporali & Spaziali:** aggiunta delle query `traffic_agg` e `geo_agg` verso `ais-traffic-agg` e `ais-geo-agg`, più test di riavvio dai checkpoint.
@@ -301,3 +301,153 @@ Una volta completato e validato il progetto in locale (Fasi 0–5), è semplicis
    *Risposta:* Perché la stessa nave può essere presente in più finestre consecutive (o in due celle vicine) e verrebbe contata più volte. Per contare le navi distinte su un intervallo arbitrario usiamo la `cardinality(mmsi)` di Elasticsearch direttamente sugli eventi in `ais-events`.
 8. **"Che differenza c'è tra il tuo benchmark 1 vs 2 Worker e la scalabilità di un cluster reale?"**
    *Risposta:* Sul portatile entrambi i Worker condividono CPU, RAM e disco della stessa macchina: misuriamo quindi *parallelismo intra-nodo*, non *scalabilità orizzontale multi-host*. Serve comunque a verificare sperimentalmente che Spark distribuisca davvero le partizioni e i task su più Worker e migliori il throughput fino al limite dell'hardware locale.
+
+
+---
+
+## 9. Approfondimento sul Codice delle Fasi
+
+### 9.1 Fase 0 — Sonda Sperimentale delle 3 Sorgenti (`scripts/probe_sources.py`)
+
+**A cosa serve:** `scripts/probe_sources.py` è uno script Python **una tantum** (non gira in Docker né in streaming continuo) che interroga direttamente le 3 sorgenti reali *prima* di costruire Kafka e Spark. Produce due artefatti concreti:
+1. [`data_static/unlocode_ports.csv`](../data_static/unlocode_ports.csv) — il catalogo statico pulito dei porti marittimi che Spark leggerà da disco in Fase 2.
+2. [`docs/source_validation_report.md`](source_validation_report.md) — i numeri reali misurati su cui tariamo watermark, aree marine e pulizia delle destinazioni.
+
+**Come si esegue:**
+```bash
+uv run scripts/probe_sources.py --mqtt-seconds 180   # cattura live 3 minuti (default)
+uv run scripts/probe_sources.py --mqtt-file digitraffic_sample.jsonl  # test offline su campione locale
+```
+
+#### Passo 1 — Ordine di esecuzione fail-fast (`main`)
+Lo script scarica prima le due sorgenti HTTP veloci (`vessels` e `UN/LOCODE`) e **solo dopo** avvia la cattura live MQTT da 3 minuti: in questo modo un eventuale errore di rete/URL fallisce in 2 secondi invece di farti aspettare 180 secondi inutilmente.
+
+```python
+vessels, v_meta = fetch_vessels()
+r = requests.get(UNLOCODE_CSV_URL, timeout=30)
+r.raise_for_status()
+ports = parse_unlocode_csv(r.text)
+save_unlocode_csv(ports)  # scrive data_static/unlocode_ports.csv
+
+records, dur = capture_mqtt_live(args.mqtt_seconds)
+mqtt_stats, valid_mmsis = analyze_mqtt(records, dur)
+```
+
+#### Passo 2 — Cattura live MQTT over WebSocket TLS (`capture_mqtt_live`)
+Digitraffic espone il broker MQTT su porta `443` tramite **WebSocket cifrato (`WSS`)** al path `/mqtt`. Usiamo `paho-mqtt` v2: `loop_start()` apre il thread di rete in background, `on_connect` sottoscrive il wildcard `vessels-v2/+/location` e `on_message` raccoglie ogni messaggio con il timestamp locale di ricezione (`received_at`) e il flag `msg.retain`.
+
+```python
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
+client.ws_set_options(path="/mqtt")
+client.tls_set()
+client.on_connect = on_connect
+client.on_message = on_message
+client.connect(MQTT_BROKER, 443, keepalive=60)
+client.loop_start()
+try:
+    while time.monotonic() - t0 < seconds:
+        if connect_err:
+            raise RuntimeError(connect_err[0])
+        time.sleep(0.2)
+finally:
+    client.loop_stop()
+    client.disconnect()
+```
+*Dettaglio importante:* gli errori dentro `on_connect` vengono salvati nella lista `connect_err` perché le eccezioni sollevate nel thread di `paho-mqtt` non arrivano al thread principale. Il ciclo `while` li controlla ogni `0.2s` e interrompe subito la cattura in caso di errore.
+
+#### Passo 3 — Analisi qualità dati MQTT: duplicati, collisioni, sentinelle e out-of-order (`analyze_mqtt`)
+Su ogni messaggio ricevuto lo script controlla la validità (`mmsi` di 9 cifre, `lat`/`lon` nei range geografici, `time > 0`) e misura tutte le anomalie reali del protocollo AIS:
+
+- **Duplicati esatti vs collisioni sub-secondo:** calcoliamo lo stesso hash SHA-256 (`dedup_hash`) che userà Spark in Fase 2. Se l'hash è già stato visto è un **duplicato esatto**; se l'hash è nuovo ma la coppia `(mmsi, event_time)` era già comparsa, significa che la stessa nave ha mandato **due posizioni diverse nello stesso secondo** (collisione sub-secondo → dimostra perché non si può mai deduplicare solo su `(mmsi, time)`).
+```python
+def dedup_hash(mmsi: str, p: dict) -> str:
+    raw = (
+        f"{mmsi}|{p['time']}|{round(float(p['lat']), 5)}|{round(float(p['lon']), 5)}|"
+        f"{p.get('sog')}|{p.get('cog')}|{p.get('heading')}|{p.get('navStat')}"
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+h = dedup_hash(mmsi, p)
+if h in seen_hash:
+    exact_dups += 1
+else:
+    seen_hash.add(h)
+    if (mmsi, t) in seen_mmsi_t:
+        subsec_colls += 1
+    seen_mmsi_t.add((mmsi, t))
+```
+
+- **Sentinelle AIS e `nav_stat_mismatch`:** prima di fare confronti numerici usiamo `is_num(v)` (`isinstance(v, (int, float)) and not isinstance(v, bool)` — in Python `True` è sottoclasse di `int`!).
+```python
+if is_num(hdg) and hdg == 511:
+    sentinels["heading==511"] += 1
+if is_num(cog) and cog >= 360:
+    sentinels["cog>=360"] += 1
+if is_num(sog) and sog >= 102.2:
+    sentinels["sog>=102.2"] += 1
+if is_num(nav) and nav == 15:
+    sentinels["navStat==15"] += 1
+if is_num(rot) and rot == -128:
+    sentinels["rot==-128"] += 1
+if is_num(sog) and sog < 0.5:
+    low_sog += 1
+    mismatch += int(is_num(nav) and nav == 0)
+```
+
+- **Out-of-order e latenza:** per ogni evento calcola `received_at - event_time` (per `p50/p95/p99/max`) e confronta `event_time` col massimo `max_t` visto finora sullo stream (simulando direttamente il comportamento del **watermark** di Spark).
+
+#### Passo 4 — Anagrafica navi REST e copertura del Join (`fetch_vessels` + `analyze_vessels`)
+Digitraffic richiede due header HTTP: `Accept-Encoding: gzip` (compressione obbligatoria) e `Digitraffic-User` (identificativo applicativo). Poi calcoliamo con una semplice intersezione di `set` quanti MMSI visti su MQTT esistono nell'anagrafica REST:
+```python
+r = requests.get(
+    VESSELS_URL,
+    headers={"Accept-Encoding": "gzip", "Digitraffic-User": DIGITRAFFIC_USER},
+    timeout=15,
+)
+# ...
+v_set, m_set = set(v_mmsis), set(mqtt_mmsis)
+matched_m = len(m_set & v_set)
+matched_ev = sum(1 for m in mqtt_mmsis if m in v_set)
+```
+
+#### Passo 5 — Estrazione UN/LOCODE e risoluzione conservativa destinazioni (`parse_unlocode_csv` + `resolve_destination`)
+Il portale UNECE risponde `HTTP 403` ai client HTTP automatici, quindi lo script legge il mirror aperto `datasets/un-locode` (stessi dati UNECE già impacchettati in un singolo CSV UTF-8 con intestazione, con opzione `--unlocode-csv` per uso offline).
+
+1. **Filtro porti marittimi e calcolo ambiguità:** tiene solo le righe con `'1'` nella colonna `Function` (codice UNECE per porto marittimo), scarta gli alias (`Change == '='`), deduplica per `locode` a 5 caratteri (`Country + Location`) e conta i nomi ripetuti **solo nei 13 paesi baltici/nord-europei** per valorizzare `is_ambiguous_name`:
+```python
+for r in csv.DictReader(io.StringIO(csv_text)):
+    if (r.get("Change") or "").strip() == "=":
+        continue
+    country = (r.get("Country") or "").strip().upper()
+    loc = (r.get("Location") or "").strip().upper()
+    func = (r.get("Function") or "").strip()
+    if len(country) != 2 or len(loc) != 3 or "1" not in func:
+        continue
+    # ... deduplica locode e normalizza nome ...
+
+baltic_counts = Counter(p["port_name_norm"] for p in rows if p["country"] in BALTIC_COUNTRIES)
+```
+2. **Risoluzione a 3 stati (*Precision > Recall*):**
+```python
+def resolve_destination(raw_dest, by_code, by_name):
+    if not raw_dest or not raw_dest.strip():
+        return "EMPTY", None
+    cleaned = " ".join(raw_dest.strip().upper().split())
+    if any(sep in cleaned for sep in MULTI_STOP_SEPS):  # "<->", "<>", "->", "/"
+        return "UNRESOLVED", None
+    compact = cleaned.replace(" ", "")
+    if len(compact) == 5 and compact in by_code:        # es. "FI HEL" -> "FIHEL"
+        return "RESOLVED", compact
+    if cleaned in by_name:                              # nome univoco nei 13 paesi
+        return "RESOLVED", by_name[cleaned]["locode"]
+    return "UNRESOLVED", None
+```
+
+#### Risultati misurati live e calibrazioni ottenute (cattura `180.2s` del 2026-11-26)
+- **MQTT:** `6.131` messaggi (`34.03 msg/s`), `571` MMSI distinti, latenza `p50=0.598s` / `p99=2.265s` / `max=4.200s`, `0` out-of-order, **`14` collisioni sub-secondo**, tutte le 5 sentinelle AIS presenti (`rot=-128`: `820`, `heading=511`: `815`, `navStat=15`: `309`, `cog>=360`: `239`, `sog>=102.2`: `40`), **`nav_stat_mismatch` sul `79.03%`** delle rilevazioni ferme (`2.567 / 3.248`).
+- **Vessels REST:** `806` navi (`0` duplicati, `262 KB` in `5.65s`), match **`98.77%`** sugli MMSI distinti (`99.53%` sugli eventi) → conferma il **Broadcast Left Join** per non perdere il ~1.2% scoperto.
+- **UN/LOCODE:** `17.571` porti marittimi salvati in `data_static/unlocode_ports.csv` (`5.291` baltici, `76` nomi ambigui).
+- **Le 3 calibrazioni concrete per la Fase 2** *(dettagli completi in [`docs/source_validation_report.md`](source_validation_report.md))*:
+  1. **Watermark `1 minute` confermato:** margine >14× rispetto al ritardo massimo reale (`4.2s`).
+  2. **`sea_area` estese sui dati reali:** ispezionando i `709` messaggi finiti in `Other`, abbiamo individuato due cluster reali — il corridoio delle isole Åland (`lon 18.0–19.5`, incluso estendendo `Archipelago Sea`) e il traffico commerciale nei laghi interni finlandesi del sistema Saimaa (aggiunta la zona `Finnish Inland Waters`).
+  3. **Scoperta dei nomi bilingue UN/LOCODE:** nel dataset UNECE i grandi porti bilingue compaiono come `HELSINGFORS (HELSINKI)`, `TURKU (ABO)`, `HANGO (HANKO)` o `UST'-LUGA`; per questo con il match letterale base `HELSINKI` (20 navi) e `TURKU` (8 navi) finivano in `UNRESOLVED`. In Fase 2 (Spark SQL puro, senza cambiare il CSV a 4 colonne) espanderemo i nomi bilingue tra parentesi e normalizzeremo `-`/`'` mantenendo intatto *Precision > Recall* (i testi operativi come `FAIRWAY WORK` o `PILOT CH 11` restano `UNRESOLVED`).
