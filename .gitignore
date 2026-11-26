@@ -20,4 +20,4 @@ checkpoints/
 
 # Sample stream dumps (keep test fixtures tracked)
 *.jsonl
-!services/replay/fixtures/*.jsonl
+!tests/fixtures/*.jsonl

@@ -1,1 +1,1 @@
-# Module 2: Pinned dependencies (paho-mqtt, kafka-python-ng).
+# Phase 1: Pinned dependencies (paho-mqtt, kafka-python-ng).

@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "Smart Port — Big Data AIS maritime traffic monitoring and integration pipeline"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "paho-mqtt>=2.0",
+    "requests>=2.32",
+]
 
 [dependency-groups]
 dev = [
